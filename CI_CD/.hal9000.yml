@@ -1,0 +1,30 @@
+platform: 'linux'
+image: 'awscli'
+
+env:
+  test-aws:
+    HAL_ECS_CLUSTER: 'test-ecscluster-418023852230-us-east-2'
+    HAL_ECS_TASK: 'test-999999-YOURNAME'
+    HAL_IMAGE_URL: '418023852230.dkr.ecr.us-east-2.amazonaws.com/test-999999-YOURNAME:${HAL_COMMIT}'
+    HAL_TASK_ARN: arn:aws:iam::418023852230:role/QL/ECS/role-test-999999-YOURNAME
+    HAL_BLUE_GREEN: 'false'
+
+  beta-aws:
+    HAL_ECS_CLUSTER: 'beta-ecscluster-418023852230-us-east-2'
+    HAL_ECS_TASK: 'beta-999999-YOURNAME'
+    HAL_IMAGE_URL: '418023852230.dkr.ecr.us-east-2.amazonaws.com/beta-999999-YOURNAME:${HAL_COMMIT}'
+    HAL_TASK_ARN: arn:aws:iam::418023852230:role/QL/ECS/role-beta-999999-YOURNAME
+    HAL_BLUE_GREEN: 'false'
+
+deploy: |
+
+  - 'sed -i -e "s~\${TASK_ENVIRONMENT}~$ASPNETCORE_ENVIRONMENT~; s~\${TASK_NAME}~$HAL_ECS_TASK~; s~\${ECR_URL}~$HAL_IMAGE_URL~;  s~\${TASK_REGION}~$HAL_CONTEXT~" task.json'
+
+# Standard Deployments - uncomment out the 2 lines below to use standard deployments - MUST CHOOSE STANDARD OR BLUE/GREEN
+  - 'if [ "$HAL_BLUE_GREEN" == "false" ] ; then aws ecs register-task-definition --cli-input-json file://task.json --region $HAL_CONTEXT --task-role-arn $HAL_TASK_ARN ; fi'
+  - 'if [ "$HAL_BLUE_GREEN" == "false" ] ; then aws ecs update-service --cluster $HAL_ECS_CLUSTER --service $HAL_ECS_TASK --task-definition $HAL_ECS_TASK --region $HAL_CONTEXT ; fi'
+
+# ## Blue/Green Deployments - uncomment out the 2 lines below for blue/green deployments - MUST CHOOSE STANDARD OR BLUE/GREEN
+#   -  'if [ "$HAL_BLUE_GREEN" == "true" ] ; then sed -i -e "s~\${TASK_NAME}~$HAL_ECS_TASK~" codedeploy.json
+#   -  'if [ "$HAL_BLUE_GREEN" == "true" ] ; then pip install awscli --upgrade ; fi'
+#   -  'if [ "$HAL_BLUE_GREEN" == "true" ] ; then aws ecs deploy --service $HAL_ECS_TASK --task-definition task.json --cluster $HAL_ECS_CLUSTER --codedeploy-application $HAL_ECS_TASK --codedeploy-deployment-group $HAL_ECS_TASK --codedeploy-appspec codedeploy.json --region $HAL_CONTEXT ; fi'

@@ -1,0 +1,128 @@
+attach_workspace: &attach_workspace
+    attach_workspace:
+        at: '.'
+
+persist_workspace: &persist_workspace
+    persist_to_workspace:
+        root: '.'
+        paths: [ '.' ]
+
+persist_hal_build_id_to_workspace: &persist_hal_build_id_to_workspace
+    persist_to_workspace:
+        root: '.'
+        paths: [ '.hal_build_id' ]
+
+enterprise_setup: &enterprise_setup
+    run:
+        name: 'Prepare Enterprise Setup'
+        command: 'curl -sL https://tools.circleci.foc.zone/install-certs | bash -'
+
+deploy_nonprod_job: &deploy_nonprod_job
+    working_directory: '~/project'
+    docker: [ {image: 'qldockerdtr.rockfin.com/circleci/hal-integration:hal-publisher'} ]
+    steps:
+        - *attach_workspace
+        - run: 'deploy-to-hal-passive-only'
+
+deploy_prod_job: &deploy_prod_job
+    working_directory: '~/project'
+    docker: [ {image: 'qldockerdtr.rockfin.com/circleci/hal-integration:hal-publisher'} ]
+    steps:
+        - *attach_workspace
+        - run: 'deploy-to-hal'
+
+version: 2
+
+jobs:
+    build:
+        working_directory: '~/project'
+        docker:
+            - image: docker:17.05.0-ce-git
+        environment:
+            CIRCLE_DOCKER_IMAGE_NAME: YOURNAME
+            CIRCLE_TEST_ECR_URL: 418023852230.dkr.ecr.us-east-2.amazonaws.com/test-999999-YOURNAME
+            CIRCLE_BETA_ECR_URL: 418023852230.dkr.ecr.us-east-2.amazonaws.com/beta-999999-YOURNAME
+            CIRCLE_AWS_REGION: us-east-2
+        steps:
+            - checkout
+            - setup_remote_docker
+            - run:
+                name: Install bash and curl
+                command: |
+                    apk update
+                    apk add -y curl
+                    apk add -y bash
+                    apk update
+                    apk upgrade
+            - *enterprise_setup
+            - run:
+                name: Install CLI
+                command: |
+                    apk add --no-cache py-pip=9.0.0-r1
+                    pip install awscli==1.11.76
+            - run:
+                name: Build Docker Container
+                command: |
+                    ls
+                    docker build -t $CIRCLE_DOCKER_IMAGE_NAME ./workshop_materials/Docker/sample-container/
+            - deploy:
+                name: Push Docker Image to Test
+                command: |
+                    # Login to ECR - Tag and push docker image to TEST ECR repo
+                    aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY_NP
+                    aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID_NP
+                    eval $(aws ecr get-login --region $CIRCLE_AWS_REGION)
+                    docker tag $CIRCLE_DOCKER_IMAGE_NAME:latest $CIRCLE_TEST_ECR_URL:$CIRCLE_SHA1
+                    docker push $CIRCLE_TEST_ECR_URL:$CIRCLE_SHA1
+            - deploy:
+                name: Push Docker Image to Beta
+                command: |
+                    # Login to ECR - Tag and push docker image to BETA ECR repo
+                    aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY_NP
+                    aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID_NP
+                    eval $(aws ecr get-login --region $CIRCLE_AWS_REGION)
+                    docker tag $CIRCLE_DOCKER_IMAGE_NAME:latest $CIRCLE_BETA_ECR_URL:$CIRCLE_SHA1
+                    docker push $CIRCLE_BETA_ECR_URL:$CIRCLE_SHA1
+            - *persist_workspace
+    
+    # Pushes build to HAL to the configured HAL_APP_ID application 
+    publish_build_to_hal:
+        working_directory: '~/project'
+        docker: [ {image: 'qldockerdtr.rockfin.com/circleci/hal-integration:hal-publisher'} ]
+        environment:
+            HAL_APP_ID: 'XXXX'     #Fill in HAL application ID
+            HAL_ARTIFACT_PATH: ''
+        steps:
+            - *attach_workspace
+            - store_artifacts: { path: '~/build/task.json' }
+            - run: 'publish-build-to-hal'
+            - *persist_hal_build_id_to_workspace
+
+    # Automates HAL deployments so build is pushed automatically to each deployment target
+    deploy_test:
+        <<: *deploy_nonprod_job
+        environment:
+            HAL_TARGETS: "XXXX"  #Fill in HAL deployment target ID for TEST
+
+    deploy_beta:
+        <<: *deploy_nonprod_job
+        environment:
+            HAL_TARGETS: "XXXX"  #Fill in HAL deployment target ID for BETA
+
+workflows:
+    version: 2
+    pipeline:
+        jobs:
+            - build
+            - publish_build_to_hal:
+                requires: [ build ]
+                filters:
+                    branches:
+                        only: master
+            - deploy_test:
+                requires: [ publish_build_to_hal ]
+            - approve_deploy_beta:
+                requires: [ deploy_test ]
+                type: approval
+            - deploy_beta:
+                requires: [ approve_deploy_beta ]
